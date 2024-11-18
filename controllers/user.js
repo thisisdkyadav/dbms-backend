@@ -14,31 +14,111 @@ export const register = async (req, res) => {
     })
   }
 
+  if (username.length > 50) {
+    return res.status(400).json({
+      message: "Username must be less than 50 characters",
+      success: false,
+    })
+  }
+
+  const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
+  if (!emailRegex.test(email) || email.length > 50) {
+    return res.status(400).json({
+      message: "Invalid email format or length exceeds 50 characters",
+      success: false,
+    })
+  }
+
+  if (password.length > 255) {
+    return res.status(400).json({
+      message: "Password length exceeds maximum limit",
+      success: false,
+    })
+  }
+
+  if (!/^\d{10}$/.test(phone)) {
+    return res.status(400).json({
+      message: "Phone number must be exactly 10 digits",
+      success: false,
+    })
+  }
+
+  if (name.length > 50) {
+    return res.status(400).json({
+      message: "Name must be less than 50 characters",
+      success: false,
+    })
+  }
+
   try {
     db.query(`SELECT username FROM User WHERE username = ?`, [username], (error, results) => {
-      if (results && results.length > 0) {
-        return res.status(409).json({
-          message: ".username is already taken. Please try a different username.",
+      if (error) {
+        return res.status(500).json({
+          message: "Database error while checking username",
           success: false,
         })
       }
 
-      db.query(
-        `INSERT INTO User (username, email, password, mobileno, name) VALUES (?, ?, ?, ?, ?)`,
-        [username, email, password, phone, name],
-        (error, results) => {
-          if (results) {
-            return res.status(201).json({
-              message: "Account created successfully.",
-              success: true,
+      if (results && results.length > 0) {
+        return res.status(409).json({
+          message: "Username is already taken. Please try a different username.",
+          success: false,
+        })
+      }
+
+      db.query(`SELECT email FROM User WHERE email = ?`, [email], (error, results) => {
+        if (error) {
+          return res.status(500).json({
+            message: "Database error while checking email",
+            success: false,
+          })
+        }
+
+        if (results && results.length > 0) {
+          return res.status(409).json({
+            message: "Email is already registered",
+            success: false,
+          })
+        }
+
+        db.query(`SELECT mobileno FROM User WHERE mobileno = ?`, [phone], (error, results) => {
+          if (error) {
+            return res.status(500).json({
+              message: "Database error while checking phone number",
+              success: false,
             })
           }
-        }
-      )
+
+          if (results && results.length > 0) {
+            return res.status(409).json({
+              message: "Phone number is already registered",
+              success: false,
+            })
+          }
+
+          db.query(
+            `INSERT INTO User (username, email, password, mobileno, name) VALUES (?, ?, ?, ?, ?)`,
+            [username, email, password, phone, name],
+            (error, results) => {
+              if (error) {
+                return res.status(500).json({
+                  message: "Database error while creating user",
+                  success: false,
+                })
+              }
+
+              return res.status(201).json({
+                message: "Account created successfully",
+                success: true,
+              })
+            }
+          )
+        })
+      })
     })
   } catch (error) {
     return res.status(500).json({
-      message: "An error occurred while creating the account.",
+      message: "An error occurred while creating the account",
       success: false,
     })
   }
@@ -55,14 +135,13 @@ export const login = async (req, res) => {
     }
 
     let user
-    // -- Find the user in the database--
     db.query(
       `SELECT username,password FROM User WHERE username=?`,
       [username],
       async (error, results) => {
         if (!results || results.length === 0) {
           return res.status(401).json({
-            message: "Incorrect email or password",
+            message: "Incorrect username or password",
             success: false,
           })
         }
@@ -70,7 +149,7 @@ export const login = async (req, res) => {
 
         if (!(password === user.password)) {
           return res.status(401).json({
-            message: "Incorrect email or password",
+            message: "Incorrect username or password",
             success: false,
           })
         }
@@ -166,7 +245,6 @@ export const getMiniProfile = async (req, res) => {
 export const searchUsers = async (req, res) => {
   try {
     const usernameInitial = req.params.query
-    // -- Find users in the database --
     db.query(
       `SELECT username FROM User WHERE username LIKE ?`,
       [`${usernameInitial}%`],
@@ -194,19 +272,69 @@ export const editProfile = async (req, res) => {
     const username = req.username
     const { name, email, mobileno, password, profile_image } = req.body
 
+    if (name && name.length > 50) {
+      return res.status(400).json({
+        message: "Name must be less than 50 characters",
+        success: false,
+      })
+    }
+
     if (email) {
+      const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
+      if (!emailRegex.test(email) || email.length > 50) {
+        return res.status(400).json({
+          message: "Invalid email format or length exceeds 50 characters",
+          success: false,
+        })
+      }
+
       const [emailConflict] = await db
         .promise()
         .query(`SELECT username FROM User WHERE email = ? AND username != ?`, [email, username])
       if (emailConflict.length > 0) {
         return res.status(409).json({
-          message: "Email is already in use by another user.",
+          message: "Email is already in use by another user",
           success: false,
         })
       }
     }
 
-    // Update user profile
+    if (mobileno) {
+      if (!/^\d{10}$/.test(mobileno.toString())) {
+        return res.status(400).json({
+          message: "Phone number must be exactly 10 digits",
+          success: false,
+        })
+      }
+
+      const [phoneConflict] = await db
+        .promise()
+        .query(`SELECT username FROM User WHERE mobileno = ? AND username != ?`, [
+          mobileno,
+          username,
+        ])
+      if (phoneConflict.length > 0) {
+        return res.status(409).json({
+          message: "Phone number is already in use by another user",
+          success: false,
+        })
+      }
+    }
+
+    if (password && password.length > 255) {
+      return res.status(400).json({
+        message: "Password length exceeds maximum limit",
+        success: false,
+      })
+    }
+
+    if (profile_image && profile_image.length > 255) {
+      return res.status(400).json({
+        message: "Profile image URL exceeds maximum length",
+        success: false,
+      })
+    }
+
     const updateFields = []
     const updateValues = []
 
@@ -239,13 +367,13 @@ export const editProfile = async (req, res) => {
     }
 
     return res.status(200).json({
-      message: "Profile updated successfully.",
+      message: "Profile updated successfully",
       success: true,
     })
   } catch (error) {
     console.log(error)
     return res.status(500).json({
-      message: "An error occurred while updating the profile.",
+      message: "An error occurred while updating the profile",
       success: false,
     })
   }
@@ -280,7 +408,6 @@ export const toggleFollow = async (req, res) => {
         }
         const targetUser = results[0]
 
-        // query follows table to find people followed by user
         db.query(
           `SELECT * FROM Follows WHERE follower=? AND followed=?`,
           [followerUsername, idToFollow],

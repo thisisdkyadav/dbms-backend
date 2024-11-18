@@ -10,7 +10,6 @@ import {
   getMiniProfile,
 } from "../controllers/user.js"
 import isAuthenticated from "../middlewares/isAuthenticated.js"
-import upload from "../middlewares/multer.js"
 
 const router = express.Router()
 

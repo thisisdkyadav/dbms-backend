@@ -6,35 +6,75 @@ export const addNewPost = async (req, res) => {
     const { text, media } = req.body
     const author = req.username
 
+    if (!text || text.trim().length === 0) {
+      return res.status(400).json({
+        message: "Post text is required",
+        success: false,
+      })
+    }
+
+    if (text.length > 255) {
+      return res.status(400).json({
+        message: "Post text cannot exceed 255 characters",
+        success: false,
+      })
+    }
+
+    if (media && media.length > 500) {
+      return res.status(400).json({
+        message: "Media URL cannot exceed 500 characters",
+        success: false,
+      })
+    }
+
     const currentDateTime = new Date().toISOString().slice(0, 19).replace("T", " ")
 
-    db.query(
-      "INSERT INTO Post (author, text, media, time) VALUES (?, ?, ?, ?)",
-      [author, text, media, currentDateTime],
-      (error, results) => {
-        if (error) {
-          return res.status(500).json({
-            message: "An error occurred while creating the post.",
-            success: false,
-          })
-        }
-
-        return res.status(201).json({
-          message: "Post created successfully.",
-          success: true,
-          post: {
-            id: results.insertId,
-            authorId: author,
-            text,
-            media,
-            time: currentDateTime,
-          },
+    db.query("SELECT username FROM User WHERE username = ?", [author], (userError, userResults) => {
+      if (userError) {
+        return res.status(500).json({
+          message: "Database error while validating user",
+          success: false,
         })
       }
-    )
+
+      if (!userResults || userResults.length === 0) {
+        return res.status(404).json({
+          message: "User does not exist",
+          success: false,
+        })
+      }
+
+      db.query(
+        "INSERT INTO Post (author, text, media, time, like_count) VALUES (?, ?, ?, ?, 0)",
+        [author, text, media, currentDateTime],
+        (error, results) => {
+          if (error) {
+            console.error("Post creation error:", error)
+            return res.status(500).json({
+              message: "An error occurred while creating the post",
+              success: false,
+            })
+          }
+
+          return res.status(201).json({
+            message: "Post created successfully",
+            success: true,
+            post: {
+              id: results.insertId,
+              author,
+              text,
+              media,
+              time: currentDateTime,
+              like_count: 0,
+            },
+          })
+        }
+      )
+    })
   } catch (error) {
+    console.error("Unexpected error:", error)
     return res.status(500).json({
-      message: "An error occurred while creating the post.",
+      message: "An unexpected error occurred",
       success: false,
     })
   }
@@ -255,49 +295,122 @@ export const addComment = async (req, res) => {
     const { postId, text, parentComment = null } = req.body
     const userId = req.username
 
+    // Input validation
+    if (!text || text.trim().length === 0) {
+      return res.status(400).json({
+        message: "Comment text is required",
+        success: false,
+      })
+    }
+
+    if (!postId) {
+      return res.status(400).json({
+        message: "Post ID is required",
+        success: false,
+      })
+    }
+
+    if (text.length > 500) {
+      return res.status(400).json({
+        message: "Comment text cannot exceed 500 characters",
+        success: false,
+      })
+    }
+
     const currentDateTime = new Date().toISOString().slice(0, 19).replace("T", " ")
 
-    db.query(
-      "INSERT INTO Comment (author, post, text, parent_comment, time) VALUES (?, ?, ?, ?, ?)",
-      [userId, postId, text, parentComment, currentDateTime],
-      (error, results) => {
-        if (error) {
-          return res.status(500).json({
-            message: "An error occurred while adding the comment.",
+    // Start transaction
+    db.beginTransaction(async (err) => {
+      if (err) throw err
+
+      try {
+        // Check if user exists
+        const userExists = await new Promise((resolve, reject) => {
+          db.query("SELECT username FROM User WHERE username = ?", [userId], (error, results) => {
+            if (error) reject(error)
+            resolve(results && results.length > 0)
+          })
+        })
+
+        if (!userExists) {
+          return res.status(404).json({
+            message: "User does not exist",
             success: false,
           })
         }
 
-        return res.status(201).json({
-          message: "Comment added successfully.",
-          success: true,
+        // Check if post exists
+        const postExists = await new Promise((resolve, reject) => {
+          db.query("SELECT id FROM Post WHERE id = ?", [postId], (error, results) => {
+            if (error) reject(error)
+            resolve(results && results.length > 0)
+          })
+        })
+
+        if (!postExists) {
+          return res.status(404).json({
+            message: "Post does not exist",
+            success: false,
+          })
+        }
+
+        // Check if parent comment exists if provided
+        if (parentComment) {
+          const parentCommentExists = await new Promise((resolve, reject) => {
+            db.query("SELECT id FROM Comment WHERE id = ?", [parentComment], (error, results) => {
+              if (error) reject(error)
+              resolve(results && results.length > 0)
+            })
+          })
+
+          if (!parentCommentExists) {
+            return res.status(404).json({
+              message: "Parent comment does not exist",
+              success: false,
+            })
+          }
+        }
+
+        // Insert comment
+        db.query(
+          "INSERT INTO Comment (author, post, text, parent_comment, time) VALUES (?, ?, ?, ?, ?)",
+          [userId, postId, text, parentComment, currentDateTime],
+          (error, results) => {
+            if (error) {
+              db.rollback(() => {
+                throw error
+              })
+            }
+
+            db.commit((err) => {
+              if (err) {
+                db.rollback(() => {
+                  throw err
+                })
+              }
+
+              return res.status(201).json({
+                message: "Comment added successfully",
+                success: true,
+                commentId: results.insertId,
+              })
+            })
+          }
+        )
+      } catch (error) {
+        db.rollback(() => {
+          console.error("Error adding comment:", error)
+          return res.status(500).json({
+            message: "An error occurred while adding the comment",
+            success: false,
+          })
         })
       }
-    )
-
-    // // -- Find the post in the new database --
-    // const post = null // Placeholder
-
-    // if (!post) {
-    //   return res.status(404).json({
-    //     message: "Post not found.",
-    //     success: false,
-    //   })
-    // }
-
-    // // -- Create a new comment in the new database --
-    // const comment = null // Placeholder
-
-    // // -- Add the comment to the post in the new database --
-
-    // return res.status(201).json({
-    //   message: "Comment added successfully.",
-    //   success: true,
-    //   comment,
-    // })
+    })
   } catch (error) {
+    console.error("Unexpected error:", error)
     return res.status(500).json({
-      message: "An error occurred while adding the comment.",
+      message: "An error occurred while adding the comment",
       success: false,
     })
   }

@@ -1,19 +1,6 @@
 import { getReceiverSocketId, io } from "../socket/socket.js"
 import db from "../utils/db.js"
 
-// const findMessages = async (chatId) => {
-//   let messages = null
-
-//   db.query(`SELECT * FROM Message WHERE chat = ? ORDER BY time ASC`, [chatId], (error, results) => {
-//     if (results && results.length > 0) {
-//       messages = results
-//       return messages
-//     } else {
-//       return []
-//     }
-//   })
-// }
-
 export const sendMessage = async (req, res) => {
   try {
     const senderId = req.username

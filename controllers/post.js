@@ -1,5 +1,4 @@
-import sharp from "sharp"
-import db from "../utils/db.js"
+import db, { executeTransaction } from "../utils/db.js"
 
 export const addNewPost = async (req, res) => {
   try {
@@ -29,52 +28,39 @@ export const addNewPost = async (req, res) => {
 
     const currentDateTime = new Date().toISOString().slice(0, 19).replace("T", " ")
 
-    db.query("SELECT username FROM User WHERE username = ?", [author], (userError, userResults) => {
-      if (userError) {
-        return res.status(500).json({
-          message: "Database error while validating user",
-          success: false,
-        })
-      }
-
-      if (!userResults || userResults.length === 0) {
-        return res.status(404).json({
-          message: "User does not exist",
-          success: false,
-        })
-      }
-
-      db.query(
+    const queries = [
+      ["SELECT username FROM User WHERE username = ?", [author]],
+      [
         "INSERT INTO Post (author, text, media, time, like_count) VALUES (?, ?, ?, ?, 0)",
         [author, text, media, currentDateTime],
-        (error, results) => {
-          if (error) {
-            console.error("Post creation error:", error)
-            return res.status(500).json({
-              message: "An error occurred while creating the post",
-              success: false,
-            })
-          }
+      ],
+    ]
 
-          return res.status(201).json({
-            message: "Post created successfully",
-            success: true,
-            post: {
-              id: results.insertId,
-              author,
-              text,
-              media,
-              time: currentDateTime,
-              like_count: 0,
-            },
-          })
-        }
-      )
+    const [userResults, insertResults] = await executeTransaction(queries)
+
+    if (!userResults || userResults.length === 0) {
+      return res.status(404).json({
+        message: "User does not exist",
+        success: false,
+      })
+    }
+
+    return res.status(201).json({
+      message: "Post created successfully",
+      success: true,
+      post: {
+        id: insertResults.insertId,
+        author,
+        text,
+        media,
+        time: currentDateTime,
+        like_count: 0,
+      },
     })
   } catch (error) {
-    console.error("Unexpected error:", error)
+    console.error("Error:", error)
     return res.status(500).json({
-      message: "An unexpected error occurred",
+      message: "An error occurred",
       success: false,
     })
   }
@@ -83,36 +69,28 @@ export const addNewPost = async (req, res) => {
 export const getUserPosts = async (req, res) => {
   try {
     const username = req.params.username
+    const queries = [
+      [
+        `SELECT p.*, GROUP_CONCAT(l.user) AS liked_by 
+         FROM Post p 
+         LEFT JOIN Likes l ON p.id = l.post 
+         WHERE p.author = ? 
+         GROUP BY p.id 
+         ORDER BY p.time DESC`,
+        [username],
+      ],
+    ]
 
-    db.query(
-      `SELECT p.*, 
-              GROUP_CONCAT(l.user) AS liked_by 
-       FROM Post p 
-       LEFT JOIN Likes l ON p.id = l.post 
-       WHERE p.author = ? 
-       GROUP BY p.id 
-       ORDER BY p.time DESC`,
-      [username],
-      (error, results) => {
-        if (error) {
-          return res.status(500).json({
-            message: "An error occurred while retrieving posts.",
-            success: false,
-          })
-        }
+    const [results] = await executeTransaction(queries)
+    const posts = results.map((post) => ({
+      ...post,
+      liked_by: post.liked_by ? post.liked_by.split(",") : [],
+    }))
 
-        // Transform the results to include the liked_by array
-        const posts = results.map((post) => ({
-          ...post,
-          liked_by: post.liked_by ? post.liked_by.split(",") : [],
-        }))
-
-        return res.status(200).json({
-          success: true,
-          posts,
-        })
-      }
-    )
+    return res.status(200).json({
+      success: true,
+      posts,
+    })
   } catch (error) {
     return res.status(500).json({
       message: "An error occurred while retrieving posts.",
@@ -125,38 +103,34 @@ export const getPostById = async (req, res) => {
   try {
     const postId = req.params.id
 
-    db.query(
-      `SELECT p.*, 
+    const queries = [
+      [
+        `SELECT p.*, 
               GROUP_CONCAT(l.user) AS liked_by 
        FROM Post p 
        LEFT JOIN Likes l ON p.id = l.post 
        WHERE p.id = ? 
        GROUP BY p.id`,
-      [postId],
-      (error, results) => {
-        if (error) {
-          return res.status(500).json({
-            message: "An error occurred while retrieving the post.",
-            success: false,
-          })
-        }
+        [postId],
+      ],
+    ]
 
-        if (results.length === 0) {
-          return res.status(404).json({
-            message: "Post not found.",
-            success: false,
-          })
-        }
+    const [results] = await executeTransaction(queries)
 
-        const post = results[0]
-        post.liked_by = post.liked_by ? post.liked_by.split(",") : []
+    if (results.length === 0) {
+      return res.status(404).json({
+        message: "Post not found.",
+        success: false,
+      })
+    }
 
-        return res.status(200).json({
-          success: true,
-          post,
-        })
-      }
-    )
+    const post = results[0]
+    post.liked_by = post.liked_by ? post.liked_by.split(",") : []
+
+    return res.status(200).json({
+      success: true,
+      post,
+    })
   } catch (error) {
     return res.status(500).json({
       message: "An error occurred while retrieving the post.",
@@ -169,8 +143,9 @@ export const getPostOfFollowedUsers = async (req, res) => {
   try {
     const userId = req.username
 
-    db.query(
-      `SELECT p.*, 
+    const queries = [
+      [
+        `SELECT p.*, 
               GROUP_CONCAT(l.user) AS liked_by 
        FROM Post p 
        LEFT JOIN Likes l ON p.id = l.post 
@@ -179,27 +154,21 @@ export const getPostOfFollowedUsers = async (req, res) => {
        ) 
        GROUP BY p.id 
        ORDER BY p.time DESC`,
-      [userId],
-      (error, results) => {
-        if (error) {
-          return res.status(500).json({
-            message: "An error occurred while retrieving posts.",
-            success: false,
-          })
-        }
+        [userId],
+      ],
+    ]
 
-        // Transform the results to include the liked_by array
-        const posts = results.map((post) => ({
-          ...post,
-          liked_by: post.liked_by ? post.liked_by.split(",") : [],
-        }))
+    const [results] = await executeTransaction(queries)
 
-        return res.status(200).json({
-          success: true,
-          posts,
-        })
-      }
-    )
+    const posts = results.map((post) => ({
+      ...post,
+      liked_by: post.liked_by ? post.liked_by.split(",") : [],
+    }))
+
+    return res.status(200).json({
+      success: true,
+      posts,
+    })
   } catch (error) {
     return res.status(500).json({
       message: "An error occurred while retrieving posts.",
@@ -211,19 +180,11 @@ export const getPostOfFollowedUsers = async (req, res) => {
 export const deletePost = async (req, res) => {
   try {
     const postId = req.params.id
+    await executeTransaction([["DELETE FROM Post WHERE id = ?", [postId]]])
 
-    db.query("DELETE FROM Post WHERE id = ?", [postId], (error) => {
-      if (error) {
-        return res.status(500).json({
-          message: "An error occurred while deleting the post.",
-          success: false,
-        })
-      }
-
-      return res.status(200).json({
-        message: "Post deleted successfully.",
-        success: true,
-      })
+    return res.status(200).json({
+      message: "Post deleted successfully.",
+      success: true,
     })
   } catch (error) {
     return res.status(500).json({
@@ -238,50 +199,26 @@ export const likePost = async (req, res) => {
     const postId = req.params.id
     const userId = req.username
 
-    db.query(
-      "Select *FROM Likes WHERE user = ? AND post = ?",
-      [userId, postId],
-      (error, results) => {
-        if (error) {
-          return res.status(500).json({
-            message: "An error occurred while liking/unliking the post.",
-            success: false,
-          })
-        }
+    const queries = [["SELECT * FROM Likes WHERE user = ? AND post = ?", [userId, postId]]]
+    const [results] = await executeTransaction(queries)
 
-        if (results.length === 0) {
-          db.query("INSERT INTO Likes (user, post) VALUES (?, ?)", [userId, postId], (error) => {
-            if (error) {
-              return res.status(500).json({
-                message: "An error occurred while liking the post.",
-                success: false,
-              })
-            }
-
-            return res.status(200).json({
-              message: "Post liked successfully",
-              isLiked: true,
-              success: true,
-            })
-          })
-        } else {
-          db.query("DELETE FROM Likes WHERE user = ? AND post = ?", [userId, postId], (error) => {
-            if (error) {
-              return res.status(500).json({
-                message: "An error occurred while unliking the post.",
-                success: false,
-              })
-            }
-
-            return res.status(200).json({
-              message: "Post unliked successfully",
-              isLiked: false,
-              success: true,
-            })
-          })
-        }
-      }
-    )
+    if (results.length === 0) {
+      await executeTransaction([["INSERT INTO Likes (user, post) VALUES (?, ?)", [userId, postId]]])
+      return res.status(200).json({
+        message: "Post liked successfully",
+        isLiked: true,
+        success: true,
+      })
+    } else {
+      await executeTransaction([
+        ["DELETE FROM Likes WHERE user = ? AND post = ?", [userId, postId]],
+      ])
+      return res.status(200).json({
+        message: "Post unliked successfully",
+        isLiked: false,
+        success: true,
+      })
+    }
   } catch (error) {
     return res.status(500).json({
       message: "An error occurred while liking/unliking the post.",
@@ -295,7 +232,6 @@ export const addComment = async (req, res) => {
     const { postId, text, parentComment = null } = req.body
     const userId = req.username
 
-    // Input validation
     if (!text || text.trim().length === 0) {
       return res.status(400).json({
         message: "Comment text is required",
@@ -319,12 +255,10 @@ export const addComment = async (req, res) => {
 
     const currentDateTime = new Date().toISOString().slice(0, 19).replace("T", " ")
 
-    // Start transaction
     db.beginTransaction(async (err) => {
       if (err) throw err
 
       try {
-        // Check if user exists
         const userExists = await new Promise((resolve, reject) => {
           db.query("SELECT username FROM User WHERE username = ?", [userId], (error, results) => {
             if (error) reject(error)
@@ -339,7 +273,6 @@ export const addComment = async (req, res) => {
           })
         }
 
-        // Check if post exists
         const postExists = await new Promise((resolve, reject) => {
           db.query("SELECT id FROM Post WHERE id = ?", [postId], (error, results) => {
             if (error) reject(error)
@@ -354,7 +287,6 @@ export const addComment = async (req, res) => {
           })
         }
 
-        // Check if parent comment exists if provided
         if (parentComment) {
           const parentCommentExists = await new Promise((resolve, reject) => {
             db.query("SELECT id FROM Comment WHERE id = ?", [parentComment], (error, results) => {
@@ -371,7 +303,6 @@ export const addComment = async (req, res) => {
           }
         }
 
-        // Insert comment
         db.query(
           "INSERT INTO Comment (author, post, text, parent_comment, time) VALUES (?, ?, ?, ?, ?)",
           [userId, postId, text, parentComment, currentDateTime],
@@ -419,19 +350,11 @@ export const addComment = async (req, res) => {
 export const deleteComment = async (req, res) => {
   try {
     const commentId = req.params.commentId
+    await executeTransaction([["DELETE FROM Comment WHERE id = ?", [commentId]]])
 
-    db.query("DELETE FROM Comment WHERE id = ?", [commentId], (error) => {
-      if (error) {
-        return res.status(500).json({
-          message: "An error occurred while deleting the comment.",
-          success: false,
-        })
-      }
-
-      return res.status(200).json({
-        message: "Comment deleted successfully.",
-        success: true,
-      })
+    return res.status(200).json({
+      message: "Comment deleted successfully.",
+      success: true,
     })
   } catch (error) {
     return res.status(500).json({
@@ -445,18 +368,13 @@ export const getComments = async (req, res) => {
   try {
     const postId = req.params.postId
 
-    db.query("SELECT * FROM Comment WHERE post = ?", [postId], (error, results) => {
-      if (error) {
-        return res.status(500).json({
-          message: "An error occurred while retrieving comments.",
-          success: false,
-        })
-      }
+    const queries = [["SELECT * FROM Comment WHERE post = ?", [postId]]]
 
-      return res.status(200).json({
-        success: true,
-        comments: results,
-      })
+    const [results] = await executeTransaction(queries)
+
+    return res.status(200).json({
+      success: true,
+      comments: results,
     })
   } catch (error) {
     return res.status(500).json({

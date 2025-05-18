@@ -1,3 +1,6 @@
 uploads
 node_modules/
 .vscode
+
+.development
+.env

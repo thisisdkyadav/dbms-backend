@@ -24,7 +24,6 @@ app.use(express.urlencoded({ extended: true }))
 app.use("/api/user", userRoute)
 app.use("/api/post", postRoute)
 app.use("/api/message", messageRoute)
-app.use("/api/message", messageRoute)
 app.use("/api/comment", commentRoute)
 
 app.get("/", (req, res) => {
